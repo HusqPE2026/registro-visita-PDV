@@ -78,7 +78,8 @@ textarea{min-height:92px;resize:vertical}.readonly{background:#f3f5f7;color:#475
 <input id="pdvSearch" type="text" placeholder="Escribe al menos 2 letras..." autocomplete="off" disabled required>
 <input id="pdv" type="hidden">
 <div id="pdvSuggestions" class="suggestions hidden"></div>
-<div class="note">Escribe 2 o más letras del nombre del cliente / PDV para buscar.</div></div>
+<div class="note">Escribe 2 o más caracteres para buscar. Si el punto de venta no aparece, escribe su nombre completo y pulsa «Usar nombre ingresado».</div>
+<div class="actions"><button type="button" class="btn btn-secondary" id="useManualPdv" disabled>Usar nombre ingresado</button></div></div>
 <div class="full"><div id="pdvInfo" class="pdvbox hidden"></div></div>
 <div class="full">
 <div class="legend">Ubicación GPS de la visita <span class="req">*</span></div>
@@ -245,21 +246,34 @@ IMPULSORES.forEach(x=>$("#impulsor").add(new Option(x,x)));
 
 let pdvFiltered=[];
 $("#impulsor").addEventListener("change",e=>{
- pdvFiltered=PDVS.filter(x=>x.impulsor===e.target.value && String(x.estatus).toLowerCase()!=="inactivo");
+ pdvFiltered=PDVS.filter(x=>(x.impulsor===e.target.value || x.impulsor==="Verónica Banquez") && String(x.estatus).toLowerCase()!=="inactivo");
  $("#pdvSearch").value=""; $("#pdv").value=""; $("#pdvInfo").classList.add("hidden"); $("#pdvSuggestions").classList.add("hidden");
  $("#pdvSearch").disabled=!e.target.value;
+ $("#useManualPdv").disabled=true;
 });
 $("#pdvSearch").addEventListener("input",e=>{
  const q=e.target.value.trim().toLocaleLowerCase("es"); $("#pdv").value=""; $("#pdvInfo").classList.add("hidden");
+ $("#useManualPdv").disabled=!q;
  const box=$("#pdvSuggestions"); box.innerHTML="";
  if(q.length<2){box.classList.add("hidden");return}
- const found=pdvFiltered.filter(p=>(`${p.cliente} ${p.distrito} ${p.provincia} ${p.an8}`).toLocaleLowerCase("es").includes(q)).slice(0,20);
+ const found=pdvFiltered.filter(p=>(`${p.cliente} ${p.distrito} ${p.provincia} ${p.an8}`).toLocaleLowerCase("es").includes(q));
+ const lat=parseFloat($("#gpsLat").value), lon=parseFloat($("#gpsLon").value);
+ if(Number.isFinite(lat)&&Number.isFinite(lon)){
+   const distance=p=>p.latitud==null||p.longitud==null ? Infinity : hav(lat,lon,p.latitud,p.longitud);
+   found.sort((a,b)=>distance(a)-distance(b));
+ }
  if(!found.length){box.innerHTML='<div class="suggestion">Sin coincidencias</div>';box.classList.remove("hidden");return}
- found.forEach(p=>{const d=document.createElement("div");d.className="suggestion";d.innerHTML=`<b>${p.cliente}</b><small>${p.distrito} · ${p.provincia} · ID ${p.an8}</small>`;
+ found.slice(0,20).forEach(p=>{const d=document.createElement("div");d.className="suggestion";d.innerHTML=`<b>${p.cliente}</b><small>${p.distrito} · ${p.provincia} · ID ${p.an8}</small>`;
  d.onclick=()=>{ $("#pdvSearch").value=p.cliente; $("#pdv").value=String(PDVS.indexOf(p)); box.classList.add("hidden");
- $("#pdvInfo").innerHTML=`<b>${p.cliente}</b><br>RUC: ${p.ruc}<br>${p.distrito}, ${p.provincia}, ${p.departamento}<br>${p.direccion}`;
- $("#pdvInfo").classList.remove("hidden");}; box.appendChild(d);});
+ renderSelectedPdv();}; box.appendChild(d);});
  box.classList.remove("hidden");
+});
+$("#useManualPdv").addEventListener("click",()=>{
+ const name=$("#pdvSearch").value.trim();
+ if(!name || !$("#impulsor").value)return;
+ $("#pdvSearch").value=name;
+ $("#pdv").value="manual";
+ renderSelectedPdv();
 });
 document.addEventListener("click",e=>{if(!e.target.closest(".autocomplete"))$("#pdvSuggestions").classList.add("hidden")});
 
@@ -344,26 +358,33 @@ document.querySelectorAll("select").forEach(segmentify);
 
 // PDV: ordenar coincidencias por cercanía si hay GPS y calcular distancia al seleccionar.
 function hav(a,b,c,d){const R=6371000,rad=x=>x*Math.PI/180,dp=rad(c-a),dl=rad(d-b);const z=Math.sin(dp/2)**2+Math.cos(rad(a))*Math.cos(rad(c))*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.sqrt(z))}
-const pdvInput=$("#pdvSearch");
-if(pdvInput){
- pdvInput.addEventListener("input",()=>{
-   setTimeout(()=>{
-     const q=pdvInput.value.trim().toLowerCase(); if(q.length<2)return;
-     const lat=parseFloat($("#gpsLat").value), lon=parseFloat($("#gpsLon").value);
-     if(Number.isFinite(lat)&&Number.isFinite(lon)){
-       [...document.querySelectorAll("#pdvResults .result")].sort((A,B)=>{
-         const pa=PDVS[+A.dataset.i], pb=PDVS[+B.dataset.i];
-         const da=(pa&&pa.latitud!=null)?hav(lat,lon,+pa.latitud,+pa.longitud):1e15;
-         const db=(pb&&pb.latitud!=null)?hav(lat,lon,+pb.latitud,+pb.longitud):1e15; return da-db;
-       }).forEach(x=>$("#pdvResults").appendChild(x));
-     }
-   },0);
- });
-}
 function selectedPdvObj(){
- const info=$("#pdvInfo"); if(!info || info.classList.contains("hidden")) return null;
- const name=(info.querySelector("b")||{}).textContent;
- return PDVS.find(p=>p.cliente===name && p.impulsor===$("#impulsor").value) || PDVS.find(p=>p.cliente===name);
+ const selection=$("#pdv").value;
+ if(!selection || !$("#impulsor").value)return null;
+ if(selection==="manual"){
+   const cliente=$("#pdvSearch").value.trim();
+   return cliente ? {cliente} : null;
+ }
+ return PDVS[Number(selection)] || null;
+}
+function renderSelectedPdv(){
+ const p=selectedPdvObj(), info=$("#pdvInfo");
+ if(!p)return;
+ $("#pdvSuggestions").classList.add("hidden");
+ $("#useManualPdv").disabled=true;
+ if($("#pdv").value==="manual"){
+   info.textContent="Punto de venta ingresado manualmente: "+p.cliente;
+ }else{
+   $("#pdvSearch").value=p.cliente;
+   info.innerHTML=`<b>${p.cliente}</b><br>RUC: ${p.ruc}<br>${p.distrito}, ${p.provincia}, ${p.departamento}<br>${p.direccion}`;
+ }
+ info.classList.remove("hidden");
+ $("#pdvSearch").dispatchEvent(new Event("change",{bubbles:true}));
+}
+function escapePdvName(name){
+ const el=document.createElement("span");
+ el.textContent=name;
+ return el.innerHTML;
 }
 function updateDistance(){
  const p=selectedPdvObj(), lat=parseFloat($("#gpsLat").value),lon=parseFloat($("#gpsLon").value); selectedPDVForDistance=p;
@@ -374,7 +395,10 @@ function updateDistance(){
  $("#gpsInfo").after(el); updateSummary();
 }
 $("#gpsBtn").addEventListener("click",()=>setTimeout(updateDistance,1200));
-if($("#pdvResults")) $("#pdvResults").addEventListener("click",()=>setTimeout(()=>{updateDistance();checkDuplicate();},0));
+function refreshPdvState(){updateDistance();checkDuplicate();}
+$("#pdvSearch").addEventListener("input",refreshPdvState);
+$("#pdvSearch").addEventListener("change",refreshPdvState);
+$("#impulsor").addEventListener("change",refreshPdvState);
 
 // Intentar GPS al abrir (el navegador siempre conserva el control de permisos).
 setTimeout(()=>{if(!gpsCaptured && navigator.geolocation) $("#gpsBtn").click();},500);
@@ -429,7 +453,7 @@ function updateProgress(){
 }
 function updateSummary(){
  const p=selectedPdvObj(); const cards=[];
- cards.push(["PDV",p?p.cliente:"Pendiente"]);
+ cards.push(["PDV",p?escapePdvName(p.cliente):"Pendiente"]);
  const exh=[...document.querySelectorAll("section.card")].find(x=>x.querySelector("h2")?.textContent.includes("Exhibición"));
  cards.push(["Exhibición",exh?.querySelector("select")?.value||"Pendiente"]);
  cards.push(["Reposición",$("#reposicion")?.value||"Pendiente"]);
@@ -450,7 +474,7 @@ function checkDuplicate(){
 // Guardado local automático del borrador (sin fotos, por límites de almacenamiento del navegador).
 let saveTimer;
 function serializeDraft(){
- const data={reportId:$("#reportId").value,impulsor:$("#impulsor").value,pdvSearch:$("#pdvSearch")?.value||"",gps:{lat:$("#gpsLat").value,lon:$("#gpsLon").value,acc:$("#gpsAccuracy").value},fields:{}};
+ const data={reportId:$("#reportId").value,impulsor:$("#impulsor").value,pdvSearch:$("#pdvSearch")?.value||"",pdvSelection:$("#pdv").value,gps:{lat:$("#gpsLat").value,lon:$("#gpsLon").value,acc:$("#gpsAccuracy").value},fields:{}};
  document.querySelectorAll("input,select,textarea").forEach((el,i)=>{
    if(["file","hidden"].includes(el.type)||["reportId","fechaHora"].includes(el.id))return;
    const key=el.id||el.name||("f"+i); data.fields[key]=el.type==="checkbox"?el.checked:el.value;
@@ -469,6 +493,13 @@ function restoreDraft(){
  Object.entries(d.fields||{}).forEach(([k,v])=>{const el=document.getElementById(k)||document.querySelector(`[name="${CSS.escape(k)}"]`);if(!el)return;if(el.type==="checkbox")el.checked=!!v;else el.value=v;el.dispatchEvent(new Event("change",{bubbles:true}))});
  if(d.pdvSearch&&$("#pdvSearch"))$("#pdvSearch").value=d.pdvSearch;
  if(d.gps?.lat){$("#gpsLat").value=d.gps.lat;$("#gpsLon").value=d.gps.lon;$("#gpsAccuracy").value=d.gps.acc||"";gpsCaptured=true;$("#gpsInfo").innerHTML=`<span class="status ok">✓ Ubicación recuperada del borrador</span>`;}
+ const savedPdv=d.pdvSelection;
+ if($("#impulsor").value && (savedPdv==="manual" || (savedPdv && pdvFiltered.includes(PDVS[Number(savedPdv)])))){
+   $("#pdv").value=savedPdv;
+   renderSelectedPdv();
+ }else{
+   $("#useManualPdv").disabled=!$("#impulsor").value || !$("#pdvSearch").value.trim();
+ }
  setTimeout(()=>{updateProgress();updateSummary();},200);
 }
 setTimeout(restoreDraft,100);
@@ -485,6 +516,7 @@ addCollapseNotes();
 // Validaciones dinámicas extra.
 function contextualErrors(){
  const errs=[];
+ if(!selectedPdvObj())errs.push("Selecciona un punto de venta del listado o pulsa «Usar nombre ingresado».");
  if(!gpsCaptured)errs.push("Marca la ubicación GPS.");
  if(photoFiles.length<1)errs.push("Adjunta al menos una fotografía.");
  if($("#reposicion")?.value==="Sí" && !$("#reposicionList")?.querySelector(".repeat")) errs.push("Agrega al menos un producto que requiere reposición.");
@@ -600,7 +632,7 @@ $("#reportForm").addEventListener("submit",async e=>{
    if(!res.ok || data.ok===false)throw new Error(data.mensaje||`Error HTTP ${res.status}`);
    const p=selectedPdvObj(),rid=$("#reportId").value,hist=JSON.parse(localStorage.getItem(HISTORY_KEY)||"[]");
    hist.push({day:new Date().toISOString().slice(0,10),imp:$("#impulsor").value,pdv:p?.cliente||"",reportId:rid});localStorage.setItem(HISTORY_KEY,JSON.stringify(hist.slice(-100)));localStorage.removeItem(DRAFT_KEY);
-   const ov=document.createElement("div");ov.className="success-overlay";ov.innerHTML=`<div class="success-card"><h2>✓ Reporte registrado correctamente</h2><p><b>${data.reporte||rid}</b></p><p>${p?.cliente||""}<br>${new Date().toLocaleString("es-PE")}</p><button class="btn btn-primary" type="button" id="newVisit">Nueva visita</button><button class="btn btn-secondary" type="button" id="closeSuccess">Cerrar</button></div>`;document.body.appendChild(ov);
+   const ov=document.createElement("div");ov.className="success-overlay";ov.innerHTML=`<div class="success-card"><h2>✓ Reporte registrado correctamente</h2><p><b>${data.reporte||rid}</b></p><p>${escapePdvName(p?.cliente||"")}<br>${new Date().toLocaleString("es-PE")}</p><button class="btn btn-primary" type="button" id="newVisit">Nueva visita</button><button class="btn btn-secondary" type="button" id="closeSuccess">Cerrar</button></div>`;document.body.appendChild(ov);
    $("#newVisit").onclick=()=>location.reload();$("#closeSuccess").onclick=()=>ov.remove();
  }catch(err){console.error(err);$("#formStatus").innerHTML='<span style="color:#b42318">No se pudo registrar el reporte. El borrador se conserva. Intenta nuevamente.<br>'+String(err.message||err)+'</span>';}
  finally{submitLocked=false;$("#submitBtn").disabled=false;$("#submitBtn").textContent="ENVIAR REPORTE";}
@@ -746,7 +778,7 @@ updateSummary=function(){
 
  box.className="";
  box.innerHTML=`
-   <div class="final-summary-pdv">${p?.cliente || "PDV pendiente de seleccionar"}</div>
+   <div class="final-summary-pdv">${p ? escapePdvName(p.cliente) : "PDV pendiente de seleccionar"}</div>
    <div class="final-summary-status">
      <div class="final-summary-card"><b>Exhibición</b><span>${exhib}</span></div>
      <div class="final-summary-card"><b>Inventario</b><span>${invent}</span></div>
